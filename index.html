@@ -1,0 +1,761 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Bitsensing TraXHight RTA Development Tool</title>
+    <style>
+        html, 
+        body {
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+        }
+        #controls {
+            padding: 10px;
+            background-color: #f9f9f9;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+        }
+        #mapContainer {
+            display: flex;
+            flex-direction: row;
+            height: 90vh;
+            width: 100%;
+        }
+        #map {
+            flex-grow: 1;
+            height: 100%;
+        }
+        #resizer {
+            width: 5px;
+            cursor: ew-resize;
+            background-color: #ddd;
+        }
+        #infoPanel {
+            width: 300px;
+            padding: 20px;
+            box-shadow: -2px 0 5px rgba(0, 0, 0, 0.1);
+            display: none;
+            background-color: white;
+            position: relative;
+            overflow: auto;
+        }
+        #closeButton {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        .radar-cursor {
+            cursor: crosshair;
+        }
+        .input-field {
+            width: 100%;
+            padding: 5px;
+            margin: 5px 0;
+        }
+        .delete-button {
+            background-color: red;
+            color: white;
+            padding: 5px 10px;
+            border: none;
+            cursor: pointer;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div id="controls">
+        <button id="btnMakeRadarPosition">레이더 만들기</button>
+        <button id="btnSave">레이더 설정 저장</button>
+        <button id="btnLoad">레이더 설정 가져오기</button>
+        <button id="toggleMarkers">마커 표시/숨기기</button>
+        <button id="toggleFOV">전체 FOV 표시/숨기기</button>
+        <button id="toggleRadarFOV">레이더 FOV 표시/숨기기</button>
+        <button id="toggleCameraFOV">카메라 FOV 표시/숨기기</button>
+    </div>
+    
+    <div id="mapContainer">
+        <div id="map"></div>
+        <div id="resizer"></div>
+        <div id="infoPanel">
+            <span id="closeButton" onclick="closeInfoPanel()">×</span>
+            <h2>레이더 정보</h2>
+            <div id="radarInfo">우클릭으로 레이더 정보를 확인하세요.</div>
+            <label>레이더 각도 (°): <input type="number" id="azimuthAngleInput" class="input-field" /></label>
+            <label>레이더 시야각 (°): <input type="number" id="radarFovInput" class="input-field" /></label>
+            <label>카메라 시야각 (°): <input type="number" id="cameraFovInput" class="input-field" /></label>
+            <label>레이더 감지 거리 (m): <input type="number" id="radarRangeInput" class="input-field" /></label>
+            <label>카메라 감지 거리 (m): <input type="number" id="cameraRangeInput" class="input-field" /></label>
+            <label>센서 설치 높이 (m): <input type="number" id="radarHeight" class="input-field" /></label>
+            <label>센서 설치 각도 (°, 양수): <input type="number" id="radarTilt" class="input-field" /></label>
+            <label><input type="checkbox" id="fovToggle" onclick="selectedRadar.toggleFovVisibility(this.checked)" checked> FOV 보기</label>
+            <button class="delete-button" onclick="deleteSelectedRadar()">레이더 삭제</button>
+        </div>
+    </div>
+    
+    <script>
+        const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+        const electron = require('electron');
+        const yaml = require('js-yaml');
+        const fs = require('fs');
+        const path = require('path');
+
+        // ipcMain.handle('show-save-dialog', async () => {
+        //     const { canceled, filePath } = await dialog.showSaveDialog({
+        //         title: 'Save Radar Info',
+        //         defaultPath: 'radar-info.json',
+        //         filters: [
+        //             { name: 'JSON Files', extensions: ['json'] }
+        //         ]
+        //     });
+        //     return canceled ? null : filePath;
+        // });
+
+        let defaultConfig = {};
+        let mapConfig = {};
+        let displayConfig = {};
+
+        // YAML 파일을 불러와 기본 설정을 읽음
+        function loadDefaultConfig() {
+            try {
+                const configPath = path.join(__dirname, 'config.yaml');
+                const fileContents = fs.readFileSync(configPath, 'utf8');
+
+                const config = yaml.load(fileContents);
+                defaultConfig = config.radar_defaults;
+                mapConfig = config.map_settings;
+                displayConfig = config.display_settings
+            
+                console.log("Default config loaded:", defaultConfig);
+                console.log("Map config loaded:", mapConfig);
+            } catch (e) {
+                console.error("Error loading YAML config file:", e);
+            }
+        }
+
+        const print = (message) => {
+            document.getElementById('radarInfo').innerText = message;
+        };
+
+        
+        
+        
+        electron.ipcRenderer.on('count', (e, count) => print(count));
+        print("N/A");
+
+        let map;
+        let isPlaceMode = 0;
+        let radars = [];
+        let selectedRadar = null;
+        let ctrlKeyDown = false;
+        let markersVisible = false;
+        let fovVisible = true;
+        let radarFovVisible = true;
+        let cameraFovVisible = true;
+
+
+        const centerLocation = { lat: 37.3642692, lng: 127.1033115 };
+
+        const resizer = document.getElementById("resizer");
+        const infoPanel = document.getElementById("infoPanel");
+        let isResizing = false;
+
+        resizer.addEventListener("mousedown", function(e) {
+            isResizing = true;
+            document.body.style.cursor = "ew-resize";
+        });
+
+        document.addEventListener("mousemove", function(e) {
+            if (!isResizing) return;
+            const newWidth = window.innerWidth - e.clientX;
+            infoPanel.style.width = `${newWidth}px`;
+        });
+
+        document.addEventListener("mouseup", function() {
+            isResizing = false;
+            document.body.style.cursor = "default";
+        });
+
+        class Radar {
+            constructor(location, name, azimuthAngle, radarFOV, cameraFOV, radarFOVElevation, cameraFOVElevation, radarRange, cameraRange, height, radar_tilt, camera_tilt) {
+                this.location = location;
+                this.name = name;
+                this.azimuthAngle = azimuthAngle;
+                this.radarFOV = radarFOV;
+                this.radarFOVElevation = radarFOVElevation;
+                this.cameraFOV = cameraFOV;
+                this.cameraFOVElevation = cameraFOVElevation;
+                this.radarRange = radarRange;
+                this.cameraRange = cameraRange;
+                this.height = height;
+                this.radar_tilt = radar_tilt;
+                this.camera_tilt = camera_tilt;
+            
+                
+                this.isSelected = false;
+                this.defaultCircleRadius = 10;
+                this.enlargedCircleRadius = this.defaultCircleRadius * 1.2;
+                this.circle = new google.maps.Circle({
+                    strokeColor: "orange",
+                    strokeOpacity: 1,
+                    strokeWeight: 3,
+                    fillColor: "orange",
+                    fillOpacity: 0.5,
+                    map: map,
+                    center: location,
+                    radius: this.defaultCircleRadius,
+                    zIndex: 1000  // Set zIndex to a high value
+                });
+
+                this.marker = new google.maps.Marker({
+                    position: location,
+                    map: map,
+                    visible: false,
+                    draggable: true
+                });
+
+                this.fovConfig = displayConfig
+                
+                
+                this.drawFov(); // 부채꼴 형태의 FOV 생성
+                this.arrowMarker = this.createArrowMarker(); // 화살표 마커 생성
+
+                // 마우스 오버 이벤트로 확대 효과
+                this.circle.addListener("mouseover", () => {
+                    if (!this.isSelected) {
+                        this.circle.setRadius(this.enlargedCircleRadius);
+                        this.circle.setOptions({ strokeColor: "red", fillColor: "orange", fillOpacity: 0.7 });
+                    }
+                });
+
+
+                this.circle.addListener("mouseout", () => {
+                    if (!this.isSelected) {
+                        this.circle.setRadius(this.defaultCircleRadius);
+                        this.circle.setOptions({ strokeColor: "orange", fillColor: "orange", fillOpacity: 0.5 });
+                    }
+                });
+
+                this.circle.addListener('rightclick', () => {
+                    this.selectRadar();
+                    this.displayInfo();
+                });
+
+                this.circle.addListener('click', (event) => {
+                    this.selectRadar();
+                    this.displayInfo();
+                    if (ctrlKeyDown) {
+                        this.marker.setVisible(true);
+                    }
+                });
+
+                this.marker.addListener('drag', (event) => {
+                    this.updateLocation(event.latLng.lat(), event.latLng.lng());
+                    this.displayInfo();
+                    this.updateFov();
+                });
+
+                    // 화살표 마커 드래그 시 각도 업데이트
+                this.arrowMarker.addListener('drag', (event) => {
+                    this.updateAngle(event.latLng);
+                    this.updateFov();
+                });
+            
+            }
+
+            toJSON() {
+                return {
+                    location: {
+                        lat: this.location.lat(),
+                        lng: this.location.lng()
+                    },
+                    name: this.name,
+                    azimuthAngle: this.azimuthAngle,
+                    radarFOV: this.radarFOV,
+                    radarFOVElevation: this.radarFOVElevation,
+                    cameraFOV: this.cameraFOV,
+                    cameraFOVElevation: this.cameraFOVElevation,
+                    radarRange: this.radarRange,
+                    cameraRange: this.cameraRange,
+                    height: this.height,
+                    radar_tilt: this.radar_tilt,
+                    camera_tilt: this.camera_tilt
+                };
+            }
+
+            selectRadar() {
+                // 기존에 선택된 레이더의 강조 해제
+                if (selectedRadar && selectedRadar !== this) {
+                    selectedRadar.deselectRadar();
+                }
+
+                // 현재 레이더 선택 상태 토글
+                if (this.isSelected) {
+                    this.deselectRadar();
+                } else {
+                    this.circle.setRadius(this.enlargedCircleRadius);
+                    this.circle.setOptions({ strokeColor: "red", fillColor: "orange", fillOpacity: 0.7 });
+                    this.arrowMarker.setVisible(true);
+                    if (ctrlKeyDown) this.marker.setVisible(true);
+                    this.isSelected = true;
+                    selectedRadar = this;
+                }
+            }
+
+            deselectRadar() {
+                this.circle.setRadius(this.defaultCircleRadius);
+                this.circle.setOptions({ strokeColor: "orange", fillColor: "orange", fillOpacity: 0.5 });
+                this.marker.setVisible(false);
+                this.arrowMarker.setVisible(false);
+                this.isSelected = false;
+                noneInfoPanel()
+            }
+
+            drawFov() {
+                const angleStart = this.azimuthAngle - this.radarFOV / 2;
+                const angleEnd = this.azimuthAngle + this.radarFOV / 2;
+                const radar_inner_meter = this.height * Math.tan((90 - this.radar_tilt - this.radarFOVElevation/2)*Math.PI/180);
+                this.radarInnerMeter = radar_inner_meter;
+                this.radarFovPath = this.createFovPath(angleStart, angleEnd, this.radarRange, this.fovConfig['fov_color']['radar'], radar_inner_meter);
+
+                const camera_inner_meter = this.height * Math.tan((90 - this.camera_tilt - this.cameraFOVElevation/2)*Math.PI/180);
+                this.cameraInnerMeter = camera_inner_meter;
+                const cameraAngleStart = this.azimuthAngle - this.cameraFOV / 2;
+                const cameraAngleEnd = this.azimuthAngle + this.cameraFOV / 2;
+                this.cameraFovPath = this.createFovPath(cameraAngleStart, cameraAngleEnd, this.cameraRange, this.fovConfig['fov_color']['camera'], camera_inner_meter);
+
+                // this.toggleFovVisibility(fovVisible);
+                this.toggleCameraFovVisibility(cameraFovVisible);
+                this.toggleRadarFovVisibility(radarFovVisible);
+            }
+
+            
+
+            createArrowMarker() {
+                const angleRadians = this.azimuthAngle * (Math.PI / 180);
+                const arrowPosition = new google.maps.LatLng(
+                    this.location.lat() + (30 / 111320) * Math.cos(angleRadians),
+                    this.location.lng() + (30 / (111320 * Math.cos(this.location.lat() * (Math.PI / 180)))) * Math.sin(angleRadians)
+                );
+
+                return new google.maps.Marker({
+                    position: arrowPosition,
+                    map: map,
+                    icon: {
+                        path: google.maps.SymbolPath.FORWARD_CLOSED_ARROW,
+                        scale: 5,
+                        fillColor: "red",
+                        fillOpacity: 0.8,
+                        strokeWeight: 2,
+                        rotation: this.azimuthAngle // 각도를 반영하여 회전 설정
+                    },
+                    draggable: true
+                });
+            }
+
+            updateArrowPosition() {
+                const angleRadians = this.azimuthAngle * (Math.PI / 180);
+                const arrowDistance = 30 / 111320; // 지도 상에서 레이더와 arrowMarker 사이의 거리
+
+                const arrowPosition = new google.maps.LatLng(
+                    this.location.lat() + arrowDistance * Math.cos(angleRadians),
+                    this.location.lng() + arrowDistance * Math.sin(angleRadians) / Math.cos(this.location.lat() * (Math.PI / 180))
+                );
+                this.arrowMarker.setPosition(arrowPosition);
+                this.arrowMarker.setIcon({
+                    ...this.arrowMarker.getIcon(),
+                    rotation: this.azimuthAngle // 회전 업데이트
+                });
+            }
+
+            updateAngle(arrowPosition) {
+                const latDiff = arrowPosition.lat() - this.location.lat();
+                const lngDiff = arrowPosition.lng() - this.location.lng();
+                const distance = Math.sqrt(latDiff * latDiff + lngDiff * lngDiff);
+
+                // 원하는 고정 거리 (지도 단위에서 레이더와 arrowMarker 사이의 거리)
+                const arrowDistance = 30 / 111320;
+
+                // 비율 계산하여 고정된 거리로 변환
+                const scale = arrowDistance / distance;
+                const fixedLat = this.location.lat() + latDiff * scale;
+                const fixedLng = this.location.lng() + lngDiff * scale;
+
+                // 각도 계산
+                this.azimuthAngle = (Math.atan2(fixedLng - this.location.lng(), fixedLat - this.location.lat()) * (180 / Math.PI) + 360) % 360;
+
+                // arrowMarker의 위치를 고정된 거리로 업데이트
+                this.arrowMarker.setPosition({ lat: fixedLat, lng: fixedLng });
+                this.arrowMarker.setIcon({
+                    ...this.arrowMarker.getIcon(),
+                    rotation: this.azimuthAngle // 각도 조정
+                });
+                this.displayInfo();
+            }
+
+            createFovPath(startAngle, endAngle, outerRadius, color, innerRadius = 0) {
+                const outerPath = [];
+                const innerPath = [];
+                const center = this.location;
+
+                // Outer path points (from center to max range)
+                for (let angle = startAngle; angle <= endAngle; angle += 1) {
+                    const rad = angle * (Math.PI / 180);
+                    const lat = center.lat() + (outerRadius / 111320) * Math.cos(rad);
+                    const lng = center.lng() + (outerRadius / (111320 * Math.cos(center.lat() * (Math.PI / 180)))) * Math.sin(rad);
+                    outerPath.push({ lat, lng });
+                }
+
+                // Inner path points (excluded inner radius)
+                for (let angle = endAngle; angle >= startAngle; angle -= 1) {
+                    const rad = angle * (Math.PI / 180);
+                    const lat = center.lat() + (innerRadius / 111320) * Math.cos(rad);
+                    const lng = center.lng() + (innerRadius / (111320 * Math.cos(center.lat() * (Math.PI / 180)))) * Math.sin(rad);
+                    innerPath.push({ lat, lng });
+                }
+
+                // Create the combined path
+                const ringPath = [...outerPath, ...innerPath];
+
+                return new google.maps.Polygon({
+                    paths: ringPath,
+                    strokeColor: color,
+                    strokeOpacity: 0.8,
+                    strokeWeight: 2,
+                    fillColor: color,
+                    fillOpacity: 0.3,
+                    map: map
+                });
+            }
+
+            updateFov() {
+                this.radarFovPath.setMap(null);
+                this.cameraFovPath.setMap(null);
+                this.drawFov();
+            }
+
+            toggleFovVisibility(visible) {
+                this.fovVisible = visible
+                this.radarFovPath.setMap(visible ? map : null);
+                this.cameraFovPath.setMap(visible ? map : null);
+            }
+
+            toggleRadarFovVisibility(visible){
+
+                this.radarFovPath.setMap(visible ? map : null);
+            }
+
+            toggleCameraFovVisibility(visible){
+                
+                this.cameraFovPath.setMap(visible ? map : null);
+            }
+
+            displayInfo() {
+                const lat = this.location.lat();
+                const lng = this.location.lng();
+                
+                const info = `
+                    <strong>레이더 이름:</strong> ${this.name}<br>
+                    <strong>위치:</strong> (${lat.toFixed(6)}, ${lng.toFixed(6)})<br>
+                    <strong>각도:</strong> ${this.azimuthAngle}°<br>
+                    <strong>레이더 시야각:</strong> ${this.radarFOV}°<br>
+                    <strong>카메라 시야각:</strong> ${this.cameraFOV}°<br>
+                    <strong>레이더 감지 거리:</strong> ${this.radarRange}m<br>
+                    <strong>카메라 감지 거리:</strong> ${this.cameraRange}m<br>
+                    <strong>센서 설치 높이 :</strong> ${this.height}m<br>
+                    <strong>센서 설치 각도 :</strong> ${this.radar_tilt}°<br>
+                    <strong>레이더 음영 거리: ${this.radarInnerMeter.toFixed(1)}m</strong><br>
+                    <strong>카메라 음영 거리: ${this.cameraInnerMeter.toFixed(1)}m</strong>
+                `;
+                document.getElementById('radarInfo').innerHTML = info;
+
+                document.getElementById("azimuthAngleInput").value = this.azimuthAngle;
+                document.getElementById("radarFovInput").value = this.radarFOV;
+                document.getElementById("cameraFovInput").value = this.cameraFOV;
+                document.getElementById("radarRangeInput").value = this.radarRange;
+                document.getElementById("cameraRangeInput").value = this.cameraRange;
+                document.getElementById("radarHeight").value = this.height;
+                document.getElementById("radarTilt").value = this.radar_tilt;
+
+                updateFovCheckbox();
+                openInfoPanel();
+            }
+
+            updateSettings() {
+                this.azimuthAngle = parseFloat(document.getElementById("azimuthAngleInput").value);
+                this.radarFOV = parseFloat(document.getElementById("radarFovInput").value);
+                this.cameraFOV = parseFloat(document.getElementById("cameraFovInput").value);
+                this.radarRange = parseFloat(document.getElementById("radarRangeInput").value);
+                this.cameraRange = parseFloat(document.getElementById("cameraRangeInput").value);
+                this.height = parseFloat(document.getElementById("radarHeight").value);
+                this.radar_tilt = parseFloat(document.getElementById("radarTilt").value);
+                this.camera_tilt = this.radar_tilt + 5
+                this.updateFov();
+                this.displayInfo();
+            }
+
+            updateLocation(lat, lng) {
+                this.location = new google.maps.LatLng(lat, lng);
+                this.circle.setCenter(this.location);
+                this.marker.setPosition(this.location);
+                this.updateArrowPosition(); // arrowMarker 위치도 업데이트
+            }
+
+            setMarkerVisibility(visible) {
+                this.marker.setVisible(visible);
+            }
+
+            remove() {
+                this.circle.setMap(null);
+                this.marker.setMap(null);
+                this.radarFovPath.setMap(null);
+                this.cameraFovPath.setMap(null);
+                this.arrowMarker.setMap(null); // 화살표 제거
+            }
+        }
+
+        function openInfoPanel() {
+            document.getElementById("infoPanel").style.display = "block";
+        }
+
+        function closeInfoPanel() {
+            document.getElementById("infoPanel").style.display = "none";
+        }
+
+        function noneInfoPanel() {
+            // document.getElementById("infoPanel").style.display = "block";
+            const info = `
+                    <strong>레이더 이름: Null</strong><br>
+                    <strong>위치:</strong><br>
+                    <strong>각도:</strong>°<br>
+                    <strong>레이더 시야각:</strong> °<br>
+                    <strong>카메라 시야각:</strong> °<br>
+                    <strong>레이더 감지 거리:</strong> m<br>
+                    <strong>카메라 감지 거리:</strong> m
+                `;
+                document.getElementById('radarInfo').innerHTML = info;
+        }
+
+        function toggleMarkersVisibility() {
+            markersVisible = !markersVisible;
+            radars.forEach(radar => radar.setMarkerVisibility(markersVisible));
+        }
+
+        function toggleFovVisibility() {
+            cameraFovVisible = !cameraFovVisible
+            radarFovVisible = !radarFovVisible
+            // fovVisible = !fovVisible
+            // fovVisible = document.getElementById("fovToggle").checked;
+            radars.forEach(radar => {
+                radar.toggleRadarFovVisibility(radarFovVisible);
+                radar.toggleCameraFovVisibility(cameraFovVisible);
+            });
+        }
+
+        function toggleRadarFovVisibility() {
+            // cameraFovVisible = !cameraFovVisible;
+            radarFovVisible = !radarFovVisible
+            // fovVisible = !fovVisible
+            // fovVisible = document.getElementById("fovToggle").checked;
+            radars.forEach(radar => {
+                radar.toggleRadarFovVisibility(radarFovVisible);
+                // radar.toggleCameraFovVisibility(cameraFovVisible)
+            });
+        }
+
+        function toggleCameraFovVisibility() {
+            cameraFovVisible = !cameraFovVisible
+            // radarFovVisible = !radarFovVisible;
+            // fovVisible = !fovVisible
+            // fovVisible = document.getElementById("fovToggle").checked;
+            radars.forEach(radar => {
+                // radar.toggleRadarFovVisibility(radarFovVisible),
+                radar.toggleCameraFovVisibility(cameraFovVisible);
+            });
+        }
+
+        function updateFovCheckbox() {
+            const checkbox = document.getElementById("fovToggle");
+            if (selectedRadar) {
+                checkbox.checked = selectedRadar.fovVisible;
+            }
+        }
+
+        function deleteSelectedRadar() {
+            if (selectedRadar) {
+                selectedRadar.remove();
+                radars = radars.filter(radar => radar !== selectedRadar);
+                selectedRadar = null;
+                // closeInfoPanel();
+                noneInfoPanel();
+            }
+        }
+
+        function deselectAllRadars() {
+            selectedRadar = null;
+            for (let radar of radars) {
+                radar.isSelected = false;
+                radar.deselectRadar(); // 각 레이더의 선택 상태 해제
+            }
+        }
+
+        function saveRadarInfo() {
+            // 현재 레이더 정보를 JSON 객체 배열로 변환
+            const radarData = radars.map(radar => radar.toJSON());
+            const filePath = path.join(__dirname, 'radarData.json');
+            
+            // Electron API를 통해 저장 요청
+            window.electronAPI.saveRadarInfo(radarData).then(result => {
+                if (result.success) {
+                alert(`레이더 데이터가 성공적으로 저장되었습니다: ${result.filePath}`);
+                } else {
+                alert('레이더 데이터 저장이 취소되었습니다.');
+                }
+            });
+        }
+
+        
+
+        function loadRadarInfo() {
+            const filePath = path.join(__dirname, 'radarData.json');
+
+            // JSON 파일 읽기
+            fs.readFile(filePath, 'utf8', (err, data) => {
+                if (err) {
+                    console.error("Error loading radar data:", err);
+                    return;
+                }
+
+                try {
+                    const radarData = JSON.parse(data);
+                    
+                    // 로드한 레이더 데이터를 사용해 레이더 재생성
+                    radarData.forEach(radarInfo => {
+                        const { location, name, azimuthAngle, radarFOV, cameraFOV, radarFOVElevation, cameraFOVElevation, radarRange, cameraRange, height, radar_tilt, camera_tilt } = radarInfo;
+                        const radar = new Radar(
+                            new google.maps.LatLng(location.lat, location.lng),
+                            name,
+                            azimuthAngle,
+                            radarFOV,
+                            cameraFOV,
+                            radarFOVElevation,
+                            cameraFOVElevation,
+                            radarRange,
+                            cameraRange,
+                            height,
+                            radar_tilt,
+                            camera_tilt
+                        );
+                        radars.push(radar);  // 로드한 레이더를 radars 배열에 추가
+                    });
+
+                    console.log("Radar data loaded successfully");
+                } catch (e) {
+                    console.error("Error parsing radar data:", e);
+                }
+            });
+        }
+
+        
+        function initMap() {
+            const { center_location, start_location, end_location, zoom_level, map_type } = mapConfig;
+            // Initialize map using the config values
+            map = new google.maps.Map(document.getElementById("map"), {
+                center: { lat: center_location.lat, lng: center_location.lng },
+                zoom: zoom_level,
+                mapTypeId: map_type
+            });
+
+            // Create start and end markers using config values
+            const startMarker = new google.maps.Marker({
+                position: { lat: start_location.lat, lng: start_location.lng },
+                map: map,
+            });
+
+            const endMarker = new google.maps.Marker({
+                position: { lat: end_location.lat, lng: end_location.lng },
+                map: map,
+            });
+
+            document.getElementById('btnMakeRadarPosition').onclick = () => {
+                isPlaceMode = 1;
+                document.getElementById("map").classList.add("radar-cursor");
+                map.addListener("click", placeRadarOnClick);
+            };
+            document.addEventListener("keydown", (event) => {
+                if (event.key === "Control") ctrlKeyDown = true;
+                if ((event.key === "a" || event.key === "A") && isPlaceMode === 0) {
+                    isPlaceMode = 1;
+                    document.getElementById("map").classList.add("radar-cursor");
+                    map.addListener("click", placeRadarOnClick);
+                }
+                if (event.key === "Delete" || event.key === "D" || event.key === "d") {
+                    deleteSelectedRadar();
+                }
+                if (event.key ==="Escape"){
+                    deselectAllRadars();
+                }
+            });
+
+            document.addEventListener("keyup", (event) => {
+                if (event.key === "Control") ctrlKeyDown = false;
+            });
+            
+            document.getElementById('btnSave').onclick = saveRadarInfo;
+            document.getElementById('btnLoad').onclick = loadRadarInfo;
+            document.getElementById("toggleMarkers").onclick = toggleMarkersVisibility;
+            document.getElementById("toggleFOV").onclick = toggleFovVisibility;
+            document.getElementById("toggleRadarFOV").onclick = toggleRadarFovVisibility;
+            document.getElementById("toggleCameraFOV").onclick = toggleCameraFovVisibility;
+
+            document.getElementById("azimuthAngleInput").addEventListener("change", () => {
+                if (selectedRadar) selectedRadar.updateSettings();
+            });
+            document.getElementById("radarFovInput").addEventListener("change", () => {
+                if (selectedRadar) selectedRadar.updateSettings();
+            });
+            document.getElementById("cameraFovInput").addEventListener("change", () => {
+                if (selectedRadar) selectedRadar.updateSettings();
+            });
+            document.getElementById("radarRangeInput").addEventListener("change", () => {
+                if (selectedRadar) selectedRadar.updateSettings();
+            });
+            document.getElementById("cameraRangeInput").addEventListener("change", () => {
+                if (selectedRadar) selectedRadar.updateSettings();
+            });
+            document.getElementById("radarHeight").addEventListener("change", () => {
+                if (selectedRadar) selectedRadar.updateSettings();
+            });
+            document.getElementById("radarTilt").addEventListener("change", () => {
+                if (selectedRadar) selectedRadar.updateSettings();
+            });
+        }
+
+        
+        // 레이더를 추가할 때 기본 설정값 적용
+        function placeRadarOnClick(event) {
+            if (isPlaceMode === 1) {
+                const radarName = `radar_${radars.length}`;
+                const { azimuth_angle, radar_fov, camera_fov, radar_elevation_fov, camera_elevation_fov, radar_range, camera_range, height, radar_tilt_down  } = defaultConfig;
+                const camera_tilt = radar_tilt_down + 5;
+                const radar = new Radar(event.latLng, radarName, azimuth_angle, radar_fov, camera_fov, radar_elevation_fov, camera_elevation_fov, radar_range, camera_range, height, radar_tilt_down, camera_tilt);
+                radars.push(radar);
+                
+                isPlaceMode = 0;
+                document.getElementById("map").classList.remove("radar-cursor");
+                google.maps.event.clearListeners(map, "click");
+            }
+        }
+
+        window.onload = () => {
+            loadDefaultConfig();
+            initMap();
+            console.log(window.electronAPI);
+        };
+    </script>
+    
+    <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAVVd5543XjGOwnAYC0IZD_ax2optWvSco&callback=initMap"></script>
+</body>
+</html>

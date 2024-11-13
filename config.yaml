@@ -1,0 +1,38 @@
+# config.yaml
+
+# 기본 레이더 설정
+radar_defaults:
+  azimuth_angle: 45           # 기본 레이더 각도 (도 단위, 프로그램 내부에서 변경 가능)
+
+  radar_fov: 25               # 기본 레이더 시야각 (도 단위)
+  radar_elevation_fov: 15
+  radar_range: 300            # 기본 레이더 감지 거리 (미터 단위)
+
+  camera_fov: 65.5              # 기본 카메라 시야각 (도 단위)
+  camera_elevation_fov: 37
+  camera_range: 200            # 기본 카메라 감지 거리 (미터 단위)
+
+  height: 5                   # 카메라 설치 높이 [m]
+  radar_tilt_down: 5               # 레이더 설치 각도 ( 아래로 몇 도 기울었는가, 양수로 입력)
+
+# 지도 설정
+map_settings:
+  center_location:            # 실행되는 화면의 맵 중앙
+    lat: 45.4310364
+    lng: 10.988078
+  start_location:             # 시작 포인트에 마커 표시
+    lat: 37.3652183           
+    lng: 127.1032876
+  end_location:               # 마지막 포인트에 마커 표시
+    lat: 37.2663379
+    lng: 127.1038103
+  zoom_level: 18
+  map_type: 'hybrid'
+
+# 마커 및 FOV 표시 설정
+display_settings:
+  markers_visible: true       # 마커 기본 표시 여부
+  fov_visible: true           # FOV 기본 표시 여부
+  fov_color:                  # FOV 색상 설정
+    radar: "blue"             # 레이더 FOV 색상
+    camera: "green"           # 카메라 FOV 색상

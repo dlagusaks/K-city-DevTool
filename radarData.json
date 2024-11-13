@@ -1,0 +1,36 @@
+[
+  {
+    "location": {
+      "lat": 37.36469316092433,
+      "lng": 127.10263504669001
+    },
+    "name": "radar_0",
+    "azimuthAngle": 45,
+    "radarFOV": 25,
+    "radarFOVElevation": 15,
+    "cameraFOV": 65.5,
+    "cameraFOVElevation": 37,
+    "radarRange": 300,
+    "cameraRange": 200,
+    "height": 5,
+    "radar_tilt": 5,
+    "camera_tilt": 10
+  },
+  {
+    "location": {
+      "lat": 37.363827649378386,
+      "lng": 127.1039654223614
+    },
+    "name": "radar_1",
+    "azimuthAngle": 45,
+    "radarFOV": 25,
+    "radarFOVElevation": 15,
+    "cameraFOV": 65.5,
+    "cameraFOVElevation": 37,
+    "radarRange": 300,
+    "cameraRange": 200,
+    "height": 5,
+    "radar_tilt": 5,
+    "camera_tilt": 10
+  }
+]
