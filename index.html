@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Bitsensing TraXHight RTA Development Tool</title>
+    <title>Bitsensing FOV analyzer V0.0.1 by Dean</title>
     <style>
         html, 
         body {
@@ -19,7 +19,7 @@
         #mapContainer {
             display: flex;
             flex-direction: row;
-            height: 90vh;
+            height: 85vh;
             width: 100%;
         }
         #map {
@@ -96,22 +96,23 @@
     </div>
     
     <script>
-        const { app, BrowserWindow, ipcMain, dialog } = require('electron');
-        const electron = require('electron');
-        const yaml = require('js-yaml');
-        const fs = require('fs');
-        const path = require('path');
+        // const { app, BrowserWindow, dialog, ipcRenderer } = require('electron');
+        // const yaml = require('js-yaml');
+        
+        // const path = require('path');
 
-        // ipcMain.handle('show-save-dialog', async () => {
-        //     const { canceled, filePath } = await dialog.showSaveDialog({
-        //         title: 'Save Radar Info',
-        //         defaultPath: 'radar-info.json',
-        //         filters: [
-        //             { name: 'JSON Files', extensions: ['json'] }
-        //         ]
-        //     });
-        //     return canceled ? null : filePath;
-        // });
+        let filePath;
+
+        async function initializeFilePath() {
+            try {
+                filePath = await window.electronAPI.getUserDataPath();
+                console.log("File Path:", filePath);
+            } catch (error) {
+                console.error("Error getting file path:", error);
+            }
+        }
+
+        
 
         let defaultConfig = {};
         let mapConfig = {};
@@ -120,10 +121,10 @@
         // YAML 파일을 불러와 기본 설정을 읽음
         function loadDefaultConfig() {
             try {
-                const configPath = path.join(__dirname, 'config.yaml');
-                const fileContents = fs.readFileSync(configPath, 'utf8');
-
-                const config = yaml.load(fileContents);
+                // const configPath = window.electronAPI.getConfigPath();
+                // const fileContents = fs.readFileSync(configPath, 'utf8');
+                
+                const config = window.electronAPI.getConfigPath();
                 defaultConfig = config.radar_defaults;
                 mapConfig = config.map_settings;
                 displayConfig = config.display_settings
@@ -132,6 +133,38 @@
                 console.log("Map config loaded:", mapConfig);
             } catch (e) {
                 console.error("Error loading YAML config file:", e);
+                // 기본값 설정
+                defaultConfig = {
+                    azimuth_angle: 45,
+                    radar_fov: 25,
+                    radar_elevation_fov: 15,
+                    radar_range: 300,
+                    camera_fov: 65.5,
+                    camera_elevation_fov: 37,
+                    camera_range: 200,
+                    height: 5,
+                    radar_tilt_down: 5
+                };
+                
+                mapConfig = {
+                    center_location: { lat: 37.3642692, lng: 127.1033115 },
+                    start_location: { lat: 37.3652183, lng: 127.1032876 },
+                    end_location: { lat: 37.2663379, lng: 127.1038103 },
+                    zoom_level: 18,
+                    map_type: 'hybrid'
+                };
+                
+                displayConfig = {
+                    markers_visible: true,
+                    fov_visible: true,
+                    fov_color: {
+                        radar: "blue",
+                        camera: "green"
+                    }
+                };
+
+                console.log("Using default configuration:", { defaultConfig, mapConfig, displayConfig });
+
             }
         }
 
@@ -142,7 +175,7 @@
         
         
         
-        electron.ipcRenderer.on('count', (e, count) => print(count));
+        // electron.ipcRenderer.on('count', (e, count) => print(count));
         print("N/A");
 
         let map;
@@ -179,7 +212,7 @@
         });
 
         class Radar {
-            constructor(location, name, azimuthAngle, radarFOV, cameraFOV, radarFOVElevation, cameraFOVElevation, radarRange, cameraRange, height, radar_tilt, camera_tilt) {
+            constructor(location, name, azimuthAngle, radarFOV, cameraFOV, radarFOVElevation, cameraFOVElevation, radarRange, cameraRange, height, radar_tilt, camera_tilt, radar_radius, radar_color) {
                 this.location = location;
                 this.name = name;
                 this.azimuthAngle = azimuthAngle;
@@ -192,16 +225,17 @@
                 this.height = height;
                 this.radar_tilt = radar_tilt;
                 this.camera_tilt = camera_tilt;
-            
-                
+                // this.radarRadius = radar_radius;
+                this.radarColor = radar_color;
+                this.radarRadius = radar_radius;
                 this.isSelected = false;
-                this.defaultCircleRadius = 10;
+                this.defaultCircleRadius = this.radarRadius * 2;
                 this.enlargedCircleRadius = this.defaultCircleRadius * 1.2;
                 this.circle = new google.maps.Circle({
                     strokeColor: "orange",
                     strokeOpacity: 1,
                     strokeWeight: 3,
-                    fillColor: "orange",
+                    fillColor: this.radarColor,
                     fillOpacity: 0.5,
                     map: map,
                     center: location,
@@ -226,7 +260,7 @@
                 this.circle.addListener("mouseover", () => {
                     if (!this.isSelected) {
                         this.circle.setRadius(this.enlargedCircleRadius);
-                        this.circle.setOptions({ strokeColor: "red", fillColor: "orange", fillOpacity: 0.7 });
+                        this.circle.setOptions({ strokeColor: "red", fillColor: this.radarColor, fillOpacity: 0.7 });
                     }
                 });
 
@@ -234,7 +268,7 @@
                 this.circle.addListener("mouseout", () => {
                     if (!this.isSelected) {
                         this.circle.setRadius(this.defaultCircleRadius);
-                        this.circle.setOptions({ strokeColor: "orange", fillColor: "orange", fillOpacity: 0.5 });
+                        this.circle.setOptions({ strokeColor: "orange", fillColor: this.radarColor, fillOpacity: 0.5 });
                     }
                 });
 
@@ -281,7 +315,11 @@
                     cameraRange: this.cameraRange,
                     height: this.height,
                     radar_tilt: this.radar_tilt,
-                    camera_tilt: this.camera_tilt
+                    camera_tilt: this.camera_tilt,
+                    radar_radius: this.radarRadius, 
+                    radar_color: this.radarColor,
+                    
+                    
                 };
             }
 
@@ -425,7 +463,7 @@
                     strokeOpacity: 0.8,
                     strokeWeight: 2,
                     fillColor: color,
-                    fillOpacity: 0.3,
+                    fillOpacity: 0.15,
                     map: map
                 });
             }
@@ -601,67 +639,65 @@
             }
         }
 
-        function saveRadarInfo() {
-            // 현재 레이더 정보를 JSON 객체 배열로 변환
+        async function saveRadarInfo() {
             const radarData = radars.map(radar => radar.toJSON());
-            const filePath = path.join(__dirname, 'radarData.json');
-            
-            // Electron API를 통해 저장 요청
-            window.electronAPI.saveRadarInfo(radarData).then(result => {
-                if (result.success) {
-                alert(`레이더 데이터가 성공적으로 저장되었습니다: ${result.filePath}`);
-                } else {
-                alert('레이더 데이터 저장이 취소되었습니다.');
-                }
-            });
-        }
 
-        
-
-        function loadRadarInfo() {
-            const filePath = path.join(__dirname, 'radarData.json');
-
-            // JSON 파일 읽기
-            fs.readFile(filePath, 'utf8', (err, data) => {
-                if (err) {
-                    console.error("Error loading radar data:", err);
+            try {
+                const filePath = await window.electronAPI.showSaveDialog();
+                if (!filePath) {
+                    console.log("Save canceled by user.");
                     return;
                 }
 
-                try {
-                    const radarData = JSON.parse(data);
-                    
-                    // 로드한 레이더 데이터를 사용해 레이더 재생성
-                    radarData.forEach(radarInfo => {
-                        const { location, name, azimuthAngle, radarFOV, cameraFOV, radarFOVElevation, cameraFOVElevation, radarRange, cameraRange, height, radar_tilt, camera_tilt } = radarInfo;
-                        const radar = new Radar(
-                            new google.maps.LatLng(location.lat, location.lng),
-                            name,
-                            azimuthAngle,
-                            radarFOV,
-                            cameraFOV,
-                            radarFOVElevation,
-                            cameraFOVElevation,
-                            radarRange,
-                            cameraRange,
-                            height,
-                            radar_tilt,
-                            camera_tilt
-                        );
-                        radars.push(radar);  // 로드한 레이더를 radars 배열에 추가
-                    });
-
-                    console.log("Radar data loaded successfully");
-                } catch (e) {
-                    console.error("Error parsing radar data:", e);
-                }
-            });
+                await window.electronAPI.saveRadarData(filePath, radarData);
+                console.log(`Radar data saved to ${filePath}`);
+            } catch (error) {
+                console.error("Error saving radar data:", error);
+            }
         }
+
+        async function loadRadarInfo() {
+            try {
+                const filePath = await window.electronAPI.showOpenDialog();
+                if (!filePath) {
+                    console.log("Load canceled by user.");
+                    return;
+                }
+
+                const radarData = await window.electronAPI.loadRadarData(filePath);
+
+                radarData.forEach(radarInfo => {
+                    const radar = new Radar(
+                        new google.maps.LatLng(radarInfo.location.lat, radarInfo.location.lng),
+                        radarInfo.name,
+                        radarInfo.azimuthAngle,
+                        radarInfo.radarFOV,
+                        radarInfo.cameraFOV,
+                        radarInfo.radarFOVElevation,
+                        radarInfo.cameraFOVElevation,
+                        radarInfo.radarRange,
+                        radarInfo.cameraRange,
+                        radarInfo.height,
+                        radarInfo.radar_tilt,
+                        radarInfo.camera_tilt,
+                        radarInfo.radar_radius,
+                        radarInfo.radar_color,
+                    );
+                    radars.push(radar);
+                });
+
+                console.log("Radar data loaded successfully");
+            } catch (error) {
+                console.error("Error loading radar data:", error);
+            }
+        }
+
 
         
         function initMap() {
             const { center_location, start_location, end_location, zoom_level, map_type } = mapConfig;
             // Initialize map using the config values
+            console.log("init map : ", mapConfig)
             map = new google.maps.Map(document.getElementById("map"), {
                 center: { lat: center_location.lat, lng: center_location.lng },
                 zoom: zoom_level,
@@ -703,7 +739,11 @@
                 if (event.key === "Control") ctrlKeyDown = false;
             });
             
-            document.getElementById('btnSave').onclick = saveRadarInfo;
+            document.getElementById('btnSave').onclick = async () => {
+                // initializeFilePath가 완료되었는지 확인 후 호출
+                await initializeFilePath();
+                saveRadarInfo();
+            };
             document.getElementById('btnLoad').onclick = loadRadarInfo;
             document.getElementById("toggleMarkers").onclick = toggleMarkersVisibility;
             document.getElementById("toggleFOV").onclick = toggleFovVisibility;
@@ -738,9 +778,9 @@
         function placeRadarOnClick(event) {
             if (isPlaceMode === 1) {
                 const radarName = `radar_${radars.length}`;
-                const { azimuth_angle, radar_fov, camera_fov, radar_elevation_fov, camera_elevation_fov, radar_range, camera_range, height, radar_tilt_down  } = defaultConfig;
+                const { azimuth_angle, radar_fov, camera_fov, radar_elevation_fov, camera_elevation_fov, radar_range, camera_range, height, radar_tilt_down, radar_radius, radar_color  } = defaultConfig;
                 const camera_tilt = radar_tilt_down + 5;
-                const radar = new Radar(event.latLng, radarName, azimuth_angle, radar_fov, camera_fov, radar_elevation_fov, camera_elevation_fov, radar_range, camera_range, height, radar_tilt_down, camera_tilt);
+                const radar = new Radar(event.latLng, radarName, azimuth_angle, radar_fov, camera_fov, radar_elevation_fov, camera_elevation_fov, radar_range, camera_range, height, radar_tilt_down, camera_tilt, radar_radius, radar_color);
                 radars.push(radar);
                 
                 isPlaceMode = 0;
@@ -752,7 +792,6 @@
         window.onload = () => {
             loadDefaultConfig();
             initMap();
-            console.log(window.electronAPI);
         };
     </script>
     

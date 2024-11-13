@@ -14,12 +14,13 @@ radar_defaults:
 
   height: 5                   # 카메라 설치 높이 [m]
   radar_tilt_down: 5               # 레이더 설치 각도 ( 아래로 몇 도 기울었는가, 양수로 입력)
-
+  radar_radius: 2
+  radar_color: 'orange'
 # 지도 설정
 map_settings:
   center_location:            # 실행되는 화면의 맵 중앙
-    lat: 45.4310364
-    lng: 10.988078
+    lat: 37.3642692
+    lng: 127.1033115
   start_location:             # 시작 포인트에 마커 표시
     lat: 37.3652183           
     lng: 127.1032876
